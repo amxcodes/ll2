@@ -1,63 +1,173 @@
-import React, { createContext, useContext, useEffect, useState } from 'react'
-import { Session } from '@supabase/supabase-js'
-import { supabase } from '../utils/supabase'
-import { Platform } from 'react-native'
+// context/AuthContext.tsx
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { supabase } from '../utils/supabase';
 
-type AuthContextType = {
-  session: Session | null
-  loading: boolean
-  signOut: () => Promise<void>
+interface User {
+  id: string;
+  username: string;
+  email?: string;
+  bio?: string;
+  avatar?: string;
+  links?: any;
 }
 
-const AuthContext = createContext<AuthContextType>({
-  session: null,
-  loading: true,
-  signOut: async () => {},
-})
+interface AuthContextType {
+  user: User | null;
+  loading: boolean;
+  error: string | null;
+  signIn: (username: string, password: string) => Promise<void>;
+  signUp: (username: string, email: string, password: string, repeatPassword: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  clearError: () => void;
+  checkProfileCompletion: (userId: string) => Promise<boolean>;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (Platform.OS === 'web' && typeof window === 'undefined') {
-      setLoading(false)
-      return
+  // Helper functions
+  const validateEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const validatePassword = (password: string) => password.length >= 6;
+
+  const checkProfileCompletion = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('bio, avatar, links')
+        .eq('id', userId)
+        .single();
+
+      if (error) return false;
+      return Boolean(data?.bio?.trim() && data?.avatar && data?.links);
+    } catch {
+      return false;
     }
+  };
 
-    let mounted = true
+  const signIn = async (username: string, password: string) => {
+    setLoading(true);
+    setError(null);
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (mounted) {
-        setSession(session)
-        setLoading(false)
+    try {
+      if (!username || !password) {
+        throw new Error('Username and password are required.');
       }
-    })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
-      if (mounted) {
-        setSession(session)
-        setLoading(false)
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('username', username)
+        .eq('password_hash', password)
+        .single();
+
+      if (error || !data) {
+        throw new Error('Invalid username or password.');
       }
-    })
 
-    return () => {
-      mounted = false
-      subscription.unsubscribe()
+      setUser(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+      throw err;
+    } finally {
+      setLoading(false);
     }
-  }, [])
+  };
+
+  const signUp = async (username: string, email: string, password: string, repeatPassword: string) => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Validation
+      if (!username || !email || !password || !repeatPassword) {
+        throw new Error('All fields are required.');
+      }
+
+      if (!validateEmail(email)) {
+        throw new Error('Invalid email address.');
+      }
+
+      if (!validatePassword(password)) {
+        throw new Error('Password must be at least 6 characters long.');
+      }
+
+      if (password !== repeatPassword) {
+        throw new Error('Passwords do not match.');
+      }
+
+      // Create user
+      const { error } = await supabase.from('users').insert({
+        username,
+        email,
+        password_hash: password,
+      });
+
+      if (error) throw error;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const signOut = async () => {
-    await supabase.auth.signOut()
-    setSession(null)
-  }
+    setUser(null);
+  };
+
+  const clearError = () => {
+    setError(null);
+  };
+
+  // Check for existing session on mount
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const { data: session } = await supabase
+          .from('users')
+          .select('*')
+          .limit(1)
+          .single();
+          
+        if (session) {
+          setUser(session);
+        }
+      } catch (error) {
+        console.log('No session found');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    checkSession();
+  }, []);
 
   return (
-    <AuthContext.Provider value={{ session, loading, signOut }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        error,
+        signIn,
+        signUp,
+        signOut,
+        clearError,
+        checkProfileCompletion,
+      }}
+    >
       {children}
     </AuthContext.Provider>
-  )
+  );
 }
 
-export const useAuth = () => useContext(AuthContext)
-
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};

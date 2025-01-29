@@ -104,7 +104,7 @@ const Auth: React.FC = () => {
 
         const isProfileComplete = await checkProfileCompletion(data.id);
         if (!isProfileComplete) {
-          router.push('/ProfileCompletionScreen');
+          router.push('/profile');
         } else {
           router.push('/dash');
         }
